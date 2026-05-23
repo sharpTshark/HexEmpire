@@ -1,7 +1,7 @@
 <script setup>
-import HelloWorld from './components/HelloWorld.vue'
+import HexGrid from './components/HexGrid.vue'
 </script>
 
 <template>
-  <HelloWorld />
+  <HexGrid />
 </template>
