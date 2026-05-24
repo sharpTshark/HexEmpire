@@ -1,0 +1,14 @@
+{
+  "name": "HexEmpire",
+  "short_name": "HexEmpire",
+  "description": "Turn-based 4X hex-grid strategy game",
+  "start_url": "/HexEmpire/",
+  "scope": "/HexEmpire/",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#0d0d1a",
+  "theme_color": "#0d0d1a",
+  "icons": [
+    { "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
