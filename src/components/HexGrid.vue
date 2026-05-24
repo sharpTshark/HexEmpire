@@ -1,19 +1,19 @@
 <template>
   <canvas
     ref="canvas"
-    :style="{ cursor: isDragging ? 'grabbing' : 'grab' }"
+    :style="{ cursor: cursor }"
     @mousedown="onMouseDown"
     @mousemove="onMouseMove"
     @mouseup="onMouseUp"
-    @mouseleave="onMouseUp"
+    @mouseleave="onMouseLeave"
     @click="onClick"
   />
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted } from 'vue'
-import { state, initMap, revealTile } from '../game/gameState.js'
-import { hexToPixel, hexCorners, pixelToHex } from '../game/hex.js'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { state, initMap, revealTile, placeCapital } from '../game/gameState.js'
+import { hexToPixel, hexCorners, pixelToHex, getNeighbors } from '../game/hex.js'
 
 const canvas = ref(null)
 
@@ -37,75 +37,143 @@ const isDragging = ref(false)
 let dragMoved = false
 let dragStart  = { x: 0, y: 0 }
 
+// ── Hover (used during placement phase for the preview) ───────────────────────
+const hover = reactive({ q: null, r: null })
+
 // ── Keyboard state ────────────────────────────────────────────────────────────
 const keysDown = new Set()
 let animFrameId = null
 
+// ── Cursor ────────────────────────────────────────────────────────────────────
+const cursor = computed(() => {
+  if (isDragging.value)           return 'grabbing'
+  if (state.phase === 'placement') return 'crosshair'
+  return 'grab'
+})
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function screenToWorld(sx, sy) {
+  const W = canvas.value.width
+  const H = canvas.value.height
+  return {
+    x: (sx - W / 2 - camera.x) / camera.zoom,
+    y: (sy - H / 2 - camera.y) / camera.zoom,
+  }
+}
+
+function drawHex(ctx, q, r) {
+  const { x, y } = hexToPixel(q, r)
+  const corners   = hexCorners(x, y)
+  ctx.beginPath()
+  ctx.moveTo(corners[0][0], corners[0][1])
+  for (let i = 1; i < 6; i++) ctx.lineTo(corners[i][0], corners[i][1])
+  ctx.closePath()
+  return { x, y }
+}
+
 // ── Rendering ─────────────────────────────────────────────────────────────────
 function draw() {
   const ctx = canvas.value.getContext('2d')
-  const W = canvas.value.width
-  const H = canvas.value.height
+  const W   = canvas.value.width
+  const H   = canvas.value.height
   ctx.clearRect(0, 0, W, H)
 
-  // Apply camera transform: world origin → screen center + camera offset + zoom
   ctx.save()
   ctx.translate(W / 2 + camera.x, H / 2 + camera.y)
   ctx.scale(camera.zoom, camera.zoom)
 
   const invZoom = 1 / camera.zoom
 
-  // Draw all tiles
+  // 1. All tiles (fog or biome color)
   for (const tile of state.tiles.values()) {
-    const { x, y } = hexToPixel(tile.q, tile.r)
-    const corners   = hexCorners(x, y)
-    const visible   = state.visible.has(`${tile.q},${tile.r}`)
-
-    ctx.beginPath()
-    ctx.moveTo(corners[0][0], corners[0][1])
-    for (let i = 1; i < 6; i++) ctx.lineTo(corners[i][0], corners[i][1])
-    ctx.closePath()
-
-    ctx.fillStyle   = visible ? BIOME_COLORS[tile.biome] : FOG_COLOR
+    drawHex(ctx, tile.q, tile.r)
+    ctx.fillStyle   = state.visible.has(`${tile.q},${tile.r}`) ? BIOME_COLORS[tile.biome] : FOG_COLOR
     ctx.fill()
     ctx.strokeStyle = BORDER_COLOR
     ctx.lineWidth   = invZoom
     ctx.stroke()
   }
 
-  // Capital marker — white ring + star
-  const { q: cq, r: cr } = state.capital
-  const { x: capX, y: capY } = hexToPixel(cq, cr)
-  const capCorners = hexCorners(capX, capY)
-  ctx.beginPath()
-  ctx.moveTo(capCorners[0][0], capCorners[0][1])
-  for (let i = 1; i < 6; i++) ctx.lineTo(capCorners[i][0], capCorners[i][1])
-  ctx.closePath()
-  ctx.strokeStyle = 'rgba(255,255,255,0.9)'
-  ctx.lineWidth   = 2.5 * invZoom
-  ctx.stroke()
+  // 2. Placement preview — golden highlight on hover tile + its 6 neighbors
+  if (state.phase === 'placement' && hover.q !== null) {
+    const cq = hover.q, cr = hover.r
+    for (const [pq, pr] of [[cq, cr], ...getNeighbors(cq, cr)]) {
+      if (!state.tiles.has(`${pq},${pr}`)) continue
+      const isCenter = pq === cq && pr === cr
+      drawHex(ctx, pq, pr)
+      ctx.fillStyle   = isCenter ? 'rgba(255,215,0,0.45)' : 'rgba(255,215,0,0.18)'
+      ctx.fill()
+      ctx.strokeStyle = isCenter ? 'rgba(255,215,0,0.9)' : 'rgba(255,215,0,0.45)'
+      ctx.lineWidth   = (isCenter ? 2.5 : 1) * invZoom
+      ctx.stroke()
+    }
+    // Star preview on center tile
+    const { x: hx, y: hy } = hexToPixel(cq, cr)
+    ctx.fillStyle    = 'rgba(255,215,0,0.95)'
+    ctx.font         = `${13 * invZoom}px sans-serif`
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('★', hx, hy)
+  }
 
-  ctx.fillStyle    = 'white'
-  ctx.font         = `${13 * invZoom}px sans-serif`
-  ctx.textAlign    = 'center'
-  ctx.textBaseline = 'middle'
-  ctx.fillText('★', capX, capY)
+  // 3. Capital marker (once placed)
+  if (state.capital) {
+    const { q: cq, r: cr } = state.capital
+    const { x: capX, y: capY } = drawHex(ctx, cq, cr)
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)'
+    ctx.lineWidth   = 2.5 * invZoom
+    ctx.stroke()
+    ctx.fillStyle    = 'white'
+    ctx.font         = `${13 * invZoom}px sans-serif`
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('★', capX, capY)
+  }
 
   ctx.restore()
 
-  // ── HUD (screen-space, unaffected by camera) ──────────────────────────────
+  // ── HUD (screen-space) ────────────────────────────────────────────────────
   ctx.fillStyle = 'rgba(0,0,0,0.55)'
-  ctx.fillRect(10, 10, 230, 70)
-  ctx.fillStyle    = 'rgba(255,255,255,0.85)'
+  ctx.fillRect(10, 10, 290, 68)
   ctx.font         = '12px monospace'
   ctx.textAlign    = 'left'
   ctx.textBaseline = 'top'
-  ctx.fillText('Pan:  drag  or  WASD / ← → ↑ ↓', 16, 16)
-  ctx.fillText('Zoom: scroll  or  +  /  −  (Space: reset)', 16, 32)
-  ctx.fillText(`Zoom: ${(camera.zoom * 100).toFixed(0)}%    Click fog to reveal`, 16, 48)
+  ctx.fillStyle    = 'rgba(255,255,255,0.85)'
+  ctx.fillText('Pan:  drag  or  WASD / ←→↑↓', 16, 16)
+  ctx.fillText('Zoom: scroll · +/−   Space: home', 16, 32)
+
+  if (state.phase === 'placement') {
+    ctx.fillStyle = 'rgba(255,215,0,0.95)'
+    ctx.fillText('Click a tile to place your Capital', 16, 48)
+  } else {
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'
+    ctx.fillText(`Zoom: ${(camera.zoom * 100).toFixed(0)}%    Click fog tile to reveal`, 16, 48)
+  }
+
+  // ── Placement banner (centered, bottom of screen) ─────────────────────────
+  if (state.phase === 'placement') {
+    const msg = '✦  Choose a starting location for your Capital Village  ✦'
+    ctx.font         = 'bold 15px sans-serif'
+    const tw         = ctx.measureText(msg).width
+    const bx         = W / 2 - tw / 2 - 18
+    const by         = H - 60
+
+    ctx.fillStyle    = 'rgba(0,0,0,0.65)'
+    ctx.fillRect(bx, by, tw + 36, 42)
+    ctx.strokeStyle  = 'rgba(255,215,0,0.5)'
+    ctx.lineWidth    = 1
+    ctx.strokeRect(bx, by, tw + 36, 42)
+
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle    = 'rgba(0,0,0,0.7)'
+    ctx.fillText(msg, W / 2 + 1, by + 22)
+    ctx.fillStyle    = 'rgba(255,215,0,0.95)'
+    ctx.fillText(msg, W / 2, by + 21)
+  }
 }
 
-// ── Keyboard-driven smooth pan ─────────────────────────────────────────────────
+// ── Camera animation loop ─────────────────────────────────────────────────────
 function tick() {
   const step = 8 / camera.zoom
   let moved = false
@@ -119,6 +187,17 @@ function tick() {
   animFrameId = requestAnimationFrame(tick)
 }
 
+function applyZoom(factor, pivotX, pivotY) {
+  const W       = canvas.value.width
+  const H       = canvas.value.height
+  const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, camera.zoom * factor))
+  const scale   = newZoom / camera.zoom
+  camera.x      = camera.x * scale + (pivotX - W / 2) * (1 - scale)
+  camera.y      = camera.y * scale + (pivotY - H / 2) * (1 - scale)
+  camera.zoom   = newZoom
+  draw()
+}
+
 // ── Mouse handlers ─────────────────────────────────────────────────────────────
 function onMouseDown(e) {
   isDragging.value = true
@@ -127,42 +206,57 @@ function onMouseDown(e) {
 }
 
 function onMouseMove(e) {
-  if (!isDragging.value) return
-  const dx = e.clientX - dragStart.x
-  const dy = e.clientY - dragStart.y
-  if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragMoved = true
-  camera.x  += dx
-  camera.y  += dy
-  dragStart  = { x: e.clientX, y: e.clientY }
-  draw()
+  if (isDragging.value) {
+    const dx = e.clientX - dragStart.x
+    const dy = e.clientY - dragStart.y
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragMoved = true
+    camera.x  += dx
+    camera.y  += dy
+    dragStart  = { x: e.clientX, y: e.clientY }
+    draw()
+    return
+  }
+
+  // Update hover position for placement preview
+  if (state.phase === 'placement') {
+    const rect   = canvas.value.getBoundingClientRect()
+    const { x: wx, y: wy } = screenToWorld(e.clientX - rect.left, e.clientY - rect.top)
+    const [q, r] = pixelToHex(wx, wy)
+    if (state.tiles.has(`${q},${r}`)) {
+      hover.q = q; hover.r = r
+    } else {
+      hover.q = null; hover.r = null
+    }
+    draw()
+  }
 }
 
 function onMouseUp() {
   isDragging.value = false
 }
 
-function onClick(e) {
-  if (dragMoved) { dragMoved = false; return }
-  const W    = canvas.value.width
-  const H    = canvas.value.height
-  const rect = canvas.value.getBoundingClientRect()
-  // Screen → world coordinates
-  const wx = (e.clientX - rect.left  - W / 2 - camera.x) / camera.zoom
-  const wy = (e.clientY - rect.top   - H / 2 - camera.y) / camera.zoom
-  const [q, r] = pixelToHex(wx, wy)
-  revealTile(q, r)
-  draw()
+function onMouseLeave() {
+  isDragging.value = false
+  if (hover.q !== null) {
+    hover.q = null; hover.r = null
+    if (state.phase === 'placement') draw()
+  }
 }
 
-function applyZoom(factor, pivotX, pivotY) {
-  const W       = canvas.value.width
-  const H       = canvas.value.height
-  const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, camera.zoom * factor))
-  const scale   = newZoom / camera.zoom
-  // Keep world point under pivot fixed on screen
-  camera.x    = camera.x * scale + (pivotX - W / 2) * (1 - scale)
-  camera.y    = camera.y * scale + (pivotY - H / 2) * (1 - scale)
-  camera.zoom = newZoom
+function onClick(e) {
+  if (dragMoved) { dragMoved = false; return }
+
+  const rect       = canvas.value.getBoundingClientRect()
+  const { x: wx, y: wy } = screenToWorld(e.clientX - rect.left, e.clientY - rect.top)
+  const [q, r]     = pixelToHex(wx, wy)
+
+  if (state.phase === 'placement') {
+    if (placeCapital(q, r)) {
+      hover.q = null; hover.r = null
+    }
+  } else {
+    revealTile(q, r)
+  }
   draw()
 }
 
