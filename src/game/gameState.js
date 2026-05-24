@@ -7,6 +7,7 @@ export const state = reactive({
   seed: 42,
   capital: null,          // null until the player places it
   phase: 'placement',     // 'placement' | 'playing'
+  turn: 1,
   tiles: new Map(),
   visible: new Set(),
 })
@@ -31,11 +32,17 @@ export function placeCapital(q, r) {
   return true
 }
 
+export function endTurn() {
+  if (state.phase !== 'playing') return
+  state.turn++
+}
+
 export function initMap() {
   state.tiles.clear()
   state.visible.clear()
   state.capital = null
   state.phase   = 'placement'
+  state.turn    = 1
 
   for (const [q, r] of hexesInRadius(state.mapRadius)) {
     state.tiles.set(`${q},${r}`, { q, r, biome: null })

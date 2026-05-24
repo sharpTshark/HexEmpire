@@ -1,18 +1,28 @@
 <template>
-  <canvas
-    ref="canvas"
-    :style="{ cursor: cursor }"
-    @mousedown="onMouseDown"
-    @mousemove="onMouseMove"
-    @mouseup="onMouseUp"
-    @mouseleave="onMouseLeave"
-    @click="onClick"
-  />
+  <div class="game-root">
+    <canvas
+      ref="canvas"
+      :style="{ cursor: cursor }"
+      @mousedown="onMouseDown"
+      @mousemove="onMouseMove"
+      @mouseup="onMouseUp"
+      @mouseleave="onMouseLeave"
+      @click="onClick"
+    />
+    <button
+      v-if="state.phase === 'playing'"
+      class="end-turn-btn"
+      @click="onEndTurn"
+    >
+      End Turn <span class="turn-num">· Turn {{ state.turn }}</span>
+      <span class="hint">↵</span>
+    </button>
+  </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
-import { state, initMap, revealTile, placeCapital } from '../game/gameState.js'
+import { state, initMap, revealTile, placeCapital, endTurn } from '../game/gameState.js'
 import { hexToPixel, hexCorners, pixelToHex, getNeighbors } from '../game/hex.js'
 
 const canvas = ref(null)
@@ -147,7 +157,7 @@ function draw() {
     ctx.fillText('Click a tile to place your Capital', 16, 48)
   } else {
     ctx.fillStyle = 'rgba(255,255,255,0.85)'
-    ctx.fillText(`Zoom: ${(camera.zoom * 100).toFixed(0)}%    Click fog tile to reveal`, 16, 48)
+    ctx.fillText(`Turn: ${state.turn}    Zoom: ${(camera.zoom * 100).toFixed(0)}%`, 16, 48)
   }
 
   // ── Placement banner (centered, bottom of screen) ─────────────────────────
@@ -260,6 +270,11 @@ function onClick(e) {
   draw()
 }
 
+function onEndTurn() {
+  endTurn()
+  draw()
+}
+
 function onWheel(e) {
   e.preventDefault()
   const rect   = canvas.value.getBoundingClientRect()
@@ -283,6 +298,10 @@ function onKeyDown(e) {
     e.preventDefault()
     camera.x = 0; camera.y = 0; camera.zoom = 1
     draw()
+  }
+  if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+    e.preventDefault()
+    onEndTurn()
   }
 }
 
@@ -315,3 +334,48 @@ onUnmounted(() => {
   cancelAnimationFrame(animFrameId)
 })
 </script>
+
+<style scoped>
+.game-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.end-turn-btn {
+  position: absolute;
+  bottom: 24px;
+  right: 24px;
+  padding: 10px 22px;
+  background: rgba(13, 10, 30, 0.88);
+  border: 2px solid rgba(255, 215, 0, 0.65);
+  border-radius: 4px;
+  color: rgba(255, 215, 0, 0.95);
+  font: bold 15px sans-serif;
+  letter-spacing: 0.4px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  user-select: none;
+}
+
+.end-turn-btn:hover {
+  background: rgba(255, 215, 0, 0.12);
+  border-color: rgba(255, 215, 0, 1);
+}
+
+.end-turn-btn:active {
+  background: rgba(255, 215, 0, 0.22);
+}
+
+.end-turn-btn .turn-num {
+  opacity: 0.75;
+  font-weight: normal;
+}
+
+.end-turn-btn .hint {
+  margin-left: 8px;
+  opacity: 0.45;
+  font-size: 13px;
+  font-weight: normal;
+}
+</style>
