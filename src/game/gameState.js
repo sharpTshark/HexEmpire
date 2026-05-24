@@ -4,6 +4,8 @@ import { generateBiomes } from './biomeGen.js'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
+export const VISION_RADIUS = 3   // tiles revealed around each road/village
+
 export const COSTS = {
   road:    { wood: 1, stone: 1 },
   village: { wood: 2, stone: 2 },
@@ -92,11 +94,9 @@ export function initMap() {
 // ── Fog of war ─────────────────────────────────────────────────────────────────
 
 export function revealTile(q, r) {
-  const key = `${q},${r}`
-  if (!state.tiles.has(key)) return
-  state.visible.add(key)
-  for (const [nq, nr] of getNeighbors(q, r)) {
-    const nk = `${nq},${nr}`
+  if (!state.tiles.has(`${q},${r}`)) return
+  for (const [dq, dr] of hexesInRadius(VISION_RADIUS)) {
+    const nk = `${q + dq},${r + dr}`
     if (state.tiles.has(nk)) state.visible.add(nk)
   }
 }
