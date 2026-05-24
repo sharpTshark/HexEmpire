@@ -10,6 +10,17 @@ export const state = reactive({
   visible: new Set(),
 })
 
+// Permanently reveal a tile and its immediate neighbors (called when a road enters the tile)
+export function revealTile(q, r) {
+  const key = `${q},${r}`
+  if (!state.tiles.has(key)) return
+  state.visible.add(key)
+  for (const [nq, nr] of getNeighbors(q, r)) {
+    const nk = `${nq},${nr}`
+    if (state.tiles.has(nk)) state.visible.add(nk)
+  }
+}
+
 export function initMap() {
   state.tiles.clear()
   state.visible.clear()
