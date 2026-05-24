@@ -24,6 +24,19 @@ export function hexCorners(cx, cy) {
   })
 }
 
+// Pixel → axial hex (inverse of hexToPixel, pointy-top)
+export function pixelToHex(x, y) {
+  const q = (Math.sqrt(3) / 3 * x - y / 3) / HEX_SIZE
+  const r = (2 / 3 * y) / HEX_SIZE
+  // Cube-coordinate rounding to nearest hex center
+  const s = -q - r
+  let rq = Math.round(q), rr = Math.round(r), rs = Math.round(s)
+  const dq = Math.abs(rq - q), dr = Math.abs(rr - r), ds = Math.abs(rs - s)
+  if (dq > dr && dq > ds) rq = -rr - rs
+  else if (dr > ds)        rr = -rq - rs
+  return [rq, rr]
+}
+
 // All axial coords within a given hex radius (inclusive), using cube-coord ring sweep
 export function hexesInRadius(radius) {
   const results = []
