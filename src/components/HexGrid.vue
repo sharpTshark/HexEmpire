@@ -22,7 +22,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
-import { state, initMap, revealTile, placeCapital, endTurn } from '../game/gameState.js'
+import { state, initMap, placeCapital, buildRoad, endTurn } from '../game/gameState.js'
 import { hexToPixel, hexCorners, pixelToHex, getNeighbors } from '../game/hex.js'
 
 const canvas = ref(null)
@@ -47,8 +47,9 @@ const isDragging = ref(false)
 let dragMoved = false
 let dragStart  = { x: 0, y: 0 }
 
-// ── Hover (used during placement phase for the preview) ───────────────────────
-const hover = reactive({ q: null, r: null })
+// ── Hover — used for placement preview and road-building preview ──────────────
+const hover        = reactive({ q: null, r: null })
+const hoverIsValid = ref(false)   // true when hover is a valid road target
 
 // ── Keyboard state ────────────────────────────────────────────────────────────
 const keysDown = new Set()
@@ -56,8 +57,9 @@ let animFrameId = null
 
 // ── Cursor ────────────────────────────────────────────────────────────────────
 const cursor = computed(() => {
-  if (isDragging.value)           return 'grabbing'
-  if (state.phase === 'placement') return 'crosshair'
+  if (isDragging.value)                                   return 'grabbing'
+  if (state.phase === 'placement' && hover.q !== null)    return 'crosshair'
+  if (state.phase === 'playing'   && hoverIsValid.value)  return 'pointer'
   return 'grab'
 })
 
@@ -79,6 +81,27 @@ function drawHex(ctx, q, r) {
   for (let i = 1; i < 6; i++) ctx.lineTo(corners[i][0], corners[i][1])
   ctx.closePath()
   return { x, y }
+}
+
+function isValidRoadTarget(q, r) {
+  const key = `${q},${r}`
+  if (!state.tiles.has(key) || state.roadTiles.has(key)) return false
+  for (const [nq, nr] of getNeighbors(q, r)) {
+    if (state.roadTiles.has(`${nq},${nr}`)) return true
+  }
+  return false
+}
+
+function getValidRoadTargets() {
+  const out = new Set()
+  for (const key of state.roadTiles) {
+    const [q, r] = key.split(',').map(Number)
+    for (const [nq, nr] of getNeighbors(q, r)) {
+      const nk = `${nq},${nr}`
+      if (state.tiles.has(nk) && !state.roadTiles.has(nk)) out.add(nk)
+    }
+  }
+  return out
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
@@ -104,7 +127,35 @@ function draw() {
     ctx.stroke()
   }
 
-  // 2. Placement preview — golden highlight on hover tile + its 6 neighbors
+  // 2. Road segments — brown lines between connected road-tile centers
+  ctx.lineCap = 'round'
+  for (const seg of state.roads) {
+    const [ak, bk]   = seg.split('|')
+    const [q1, r1]   = ak.split(',').map(Number)
+    const [q2, r2]   = bk.split(',').map(Number)
+    const { x: x1, y: y1 } = hexToPixel(q1, r1)
+    const { x: x2, y: y2 } = hexToPixel(q2, r2)
+    ctx.beginPath()
+    ctx.moveTo(x1, y1)
+    ctx.lineTo(x2, y2)
+    ctx.strokeStyle = 'rgba(160, 110, 30, 0.9)'
+    ctx.lineWidth   = 4 * invZoom
+    ctx.stroke()
+  }
+  ctx.lineCap = 'butt'
+
+  // 3. Valid road targets — faint gold ring so the player knows where to expand
+  if (state.phase === 'playing') {
+    for (const key of getValidRoadTargets()) {
+      const t = state.tiles.get(key)
+      drawHex(ctx, t.q, t.r)
+      ctx.strokeStyle = 'rgba(255, 215, 0, 0.28)'
+      ctx.lineWidth   = 1.5 * invZoom
+      ctx.stroke()
+    }
+  }
+
+  // 4. Placement preview — golden highlight on hover tile + its 6 neighbors
   if (state.phase === 'placement' && hover.q !== null) {
     const cq = hover.q, cr = hover.r
     for (const [pq, pr] of [[cq, cr], ...getNeighbors(cq, cr)]) {
@@ -117,7 +168,6 @@ function draw() {
       ctx.lineWidth   = (isCenter ? 2.5 : 1) * invZoom
       ctx.stroke()
     }
-    // Star preview on center tile
     const { x: hx, y: hy } = hexToPixel(cq, cr)
     ctx.fillStyle    = 'rgba(255,215,0,0.95)'
     ctx.font         = `${13 * invZoom}px sans-serif`
@@ -126,7 +176,48 @@ function draw() {
     ctx.fillText('★', hx, hy)
   }
 
-  // 3. Capital marker (once placed)
+  // 5. Road hover preview (playing phase)
+  if (state.phase === 'playing' && hover.q !== null && hoverIsValid.value) {
+    const cq = hover.q, cr = hover.r
+
+    // a. Fog reveal preview — show which tiles would be uncovered
+    for (const [pq, pr] of [[cq, cr], ...getNeighbors(cq, cr)]) {
+      if (!state.tiles.has(`${pq},${pr}`)) continue
+      if (state.visible.has(`${pq},${pr}`)) continue
+      const isCenter = pq === cq && pr === cr
+      drawHex(ctx, pq, pr)
+      ctx.fillStyle   = isCenter ? 'rgba(200,160,50,0.3)' : 'rgba(200,160,50,0.12)'
+      ctx.fill()
+      ctx.strokeStyle = 'rgba(200,160,50,0.45)'
+      ctx.lineWidth   = invZoom
+      ctx.stroke()
+    }
+
+    // b. Dashed road preview — one dashed line per adjacent road tile
+    const { x: hx, y: hy } = hexToPixel(cq, cr)
+    ctx.lineCap = 'round'
+    ctx.setLineDash([5 * invZoom, 3 * invZoom])
+    for (const [nq, nr] of getNeighbors(cq, cr)) {
+      if (!state.roadTiles.has(`${nq},${nr}`)) continue
+      const { x: nx, y: ny } = hexToPixel(nq, nr)
+      ctx.beginPath()
+      ctx.moveTo(nx, ny)
+      ctx.lineTo(hx, hy)
+      ctx.strokeStyle = 'rgba(200, 155, 50, 0.75)'
+      ctx.lineWidth   = 4 * invZoom
+      ctx.stroke()
+    }
+    ctx.setLineDash([])
+    ctx.lineCap = 'butt'
+
+    // c. Gold border on the hovered tile itself
+    drawHex(ctx, cq, cr)
+    ctx.strokeStyle = 'rgba(255, 215, 0, 0.85)'
+    ctx.lineWidth   = 2 * invZoom
+    ctx.stroke()
+  }
+
+  // 6. Capital marker (once placed)
   if (state.capital) {
     const { q: cq, r: cr } = state.capital
     const { x: capX, y: capY } = drawHex(ctx, cq, cr)
@@ -227,18 +318,17 @@ function onMouseMove(e) {
     return
   }
 
-  // Update hover position for placement preview
-  if (state.phase === 'placement') {
-    const rect   = canvas.value.getBoundingClientRect()
-    const { x: wx, y: wy } = screenToWorld(e.clientX - rect.left, e.clientY - rect.top)
-    const [q, r] = pixelToHex(wx, wy)
-    if (state.tiles.has(`${q},${r}`)) {
-      hover.q = q; hover.r = r
-    } else {
-      hover.q = null; hover.r = null
-    }
-    draw()
+  // Track hover for placement preview and road-building preview
+  const rect   = canvas.value.getBoundingClientRect()
+  const { x: wx, y: wy } = screenToWorld(e.clientX - rect.left, e.clientY - rect.top)
+  const [q, r] = pixelToHex(wx, wy)
+  if (state.tiles.has(`${q},${r}`)) {
+    hover.q = q; hover.r = r
+    hoverIsValid.value = state.phase === 'playing' ? isValidRoadTarget(q, r) : true
+  } else {
+    hover.q = null; hover.r = null; hoverIsValid.value = false
   }
+  draw()
 }
 
 function onMouseUp() {
@@ -247,25 +337,25 @@ function onMouseUp() {
 
 function onMouseLeave() {
   isDragging.value = false
-  if (hover.q !== null) {
-    hover.q = null; hover.r = null
-    if (state.phase === 'placement') draw()
-  }
+  hover.q = null; hover.r = null; hoverIsValid.value = false
+  draw()
 }
 
 function onClick(e) {
   if (dragMoved) { dragMoved = false; return }
 
-  const rect       = canvas.value.getBoundingClientRect()
+  const rect   = canvas.value.getBoundingClientRect()
   const { x: wx, y: wy } = screenToWorld(e.clientX - rect.left, e.clientY - rect.top)
-  const [q, r]     = pixelToHex(wx, wy)
+  const [q, r] = pixelToHex(wx, wy)
 
   if (state.phase === 'placement') {
     if (placeCapital(q, r)) {
-      hover.q = null; hover.r = null
+      hover.q = null; hover.r = null; hoverIsValid.value = false
     }
-  } else {
-    revealTile(q, r)
+  } else if (state.phase === 'playing') {
+    buildRoad(q, r)
+    // Re-evaluate validity — the tile just built is now in roadTiles
+    if (hover.q !== null) hoverIsValid.value = isValidRoadTarget(hover.q, hover.r)
   }
   draw()
 }
